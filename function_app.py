@@ -6,19 +6,17 @@ import requests
 import ollama 
 import random
 import time
-import fitz  # PyMuPDF
-from docx import Document
 from playwright.sync_api import sync_playwright
 from dotenv import load_dotenv
 from pathlib import Path
-from datetime import datetime, timedelta
 
 load_dotenv()
 app = func.FunctionApp()
 
 # --- CONFIGURATION ---
-AUTO_SUBMIT = True
-RESUME_PATH = "resume.pdf"
+AUTO_SUBMIT = True        # <--- TRUE = ACTUALLY APPLY
+HEADLESS_MODE = True      # <--- TRUE = INVISIBLE BACKGROUND MODE
+RESUME_PATH = str(Path.cwd() / "resume.pdf") # <--- DIRECT PATH TO YOUR PDF
 LOG_FILE = Path("applied_jobs.json")
 
 BLACKLIST = ["Sales", "Account Executive", "Business Development", "SDR", "BDR", "Account Manager", "Customer Success", "Recruiter", "Marketing", "Head of"]
@@ -33,15 +31,6 @@ def is_valid_role(title):
         if good_word.lower() in title.lower():
             return True
     return False
-
-def cleanup_old_resumes():
-    output_dir = Path("tailored_resumes")
-    if not output_dir.exists(): return
-    now = datetime.now()
-    cutoff = now - timedelta(hours=24)
-    for file in output_dir.glob("*.docx"):
-        if datetime.fromtimestamp(file.stat().st_mtime) < cutoff:
-            file.unlink()
 
 def has_already_applied(job_id):
     if not LOG_FILE.exists(): return False
@@ -61,44 +50,20 @@ def log_applied_job(job_id):
         applied_ids.append(job_id)
         with open(LOG_FILE, "w") as f: json.dump(applied_ids, f, indent=4)
 
-def extract_resume_text(pdf_path):
-    text = ""
-    try:
-        with fitz.open(pdf_path) as doc:
-            for page in doc: text += page.get_text()
-    except Exception as e: logging.error(f"PDF Error: {e}")
-    return text
-
-def create_tailored_resume(job_title, job_description):
-    base_text = extract_resume_text(RESUME_PATH)
-    logging.info(f"✍️ Forging tailored resume for: {job_title}")
-    prompt = (
-        f"Sam is a Senior Cyber student. Projects: Archangel, SEET Paper, LDI Connect GRC.\n"
-        f"Job: {job_title}\n"
-        f"Description: {job_description[:2000]}\n"
-        "Task: Write a 3-sentence summary highlighting his AI and Cyber skills for this role."
-    )
-    response = ollama.chat(model='llama3.1', messages=[{'role': 'user', 'content': prompt}])
-    new_summary = response['message']['content']
-    doc = Document()
-    doc.add_heading(f'Sam Oakes - {job_title}', 0)
-    doc.add_paragraph(new_summary)
-    output_dir = Path("tailored_resumes")
-    output_dir.mkdir(exist_ok=True)
-    clean_title = "".join([c for c in job_title if c.isalnum() or c==' ']).replace(' ', '_')
-    file_path = output_dir / f"{clean_title}_Resume.docx"
-    doc.save(str(file_path))
-    return str(file_path.absolute())
-
 def analyze_job_locally(job_title):
+    """Optional: Still keeps the AI Pitch for your Discord notification"""
     logging.info(f"🧠 Llama 3.1 is analyzing: {job_title}")
-    response = ollama.chat(model='llama3.1', messages=[
-        {'role': 'system', 'content': "You are a career agent for Sam. Write a 1-sentence recruiter hook."}, 
-        {'role': 'user', 'content': f"Job Title: {job_title}"},
-    ])
-    return response['message']['content']
+    try:
+        response = ollama.chat(model='llama3.1', messages=[
+            {'role': 'system', 'content': "You are a career agent for Sam. Write a 1-sentence recruiter hook."}, 
+            {'role': 'user', 'content': f"Job Title: {job_title}"},
+        ])
+        return response['message']['content']
+    except:
+        return "AI Analysis Failed"
 
-def handle_easy_apply(page, tailored_resume_path):
+def handle_easy_apply(page):
+    """Navigates Easy Apply using the static resume.pdf"""
     try:
         # 1. Clear overlays
         try:
@@ -123,38 +88,37 @@ def handle_easy_apply(page, tailored_resume_path):
             logging.warning("Apply button hidden.")
             return False
 
-        # 3. The "Double-Tap" Logic
+        # 3. Double-Tap Logic
         logging.info("🖱️ Clicking Apply Button...")
         apply_btn.click(force=True)
         time.sleep(2)
 
-        # Check if modal appeared. If not, click again.
         if not page.is_visible(".artdeco-modal"):
-            logging.info("🔄 Modal didn't appear. Double-tapping...")
+            logging.info("🔄 Double-tapping...")
             apply_btn.click(force=True)
             time.sleep(2)
 
-        # 4. Wait for ANY modal (using the generic class)
+        # 4. Wait for Modal
         try:
-            # .artdeco-modal is the master class for all LinkedIn popups
             page.wait_for_selector(".artdeco-modal", timeout=10000)
             logging.info("✅ Modal Detected.")
         except:
-            logging.warning("❌ No modal appeared even after double-tap.")
+            logging.warning("❌ No modal appeared.")
             page.screenshot(path="modal_fail_debug.png")
             return False
 
-        # 5. Fill the form
-        for _ in range(8): # Increased steps for longer forms
+        # 5. Fill Form
+        for _ in range(9): # Increased loops for safety
             time.sleep(1.5)
             
-            # Upload Resume if asked
+            # Upload Resume (Static PDF)
             file_input = page.query_selector("input[type='file']")
             if file_input: 
-                logging.info(f"📤 Uploading: {tailored_resume_path}")
+                logging.info(f"📤 Uploading Base Resume: {RESUME_PATH}")
                 try:
-                    file_input.set_input_files(tailored_resume_path)
-                except: pass # Sometimes it's already filled
+                    file_input.set_input_files(RESUME_PATH)
+                except Exception as e: 
+                    logging.error(f"Upload failed: {e}")
 
             next_btn = page.query_selector("button:has-text('Next')")
             review_btn = page.query_selector("button:has-text('Review')")
@@ -170,9 +134,7 @@ def handle_easy_apply(page, tailored_resume_path):
             
             if review_btn: review_btn.click()
             elif next_btn: next_btn.click()
-            else: 
-                # If no buttons found, we might be stuck or done
-                break
+            else: break
         return True
             
     except Exception as e:
@@ -185,11 +147,18 @@ def JobScraper(myTimer: func.TimerRequest) -> None:
     run_automation()
 
 def run_automation():
-    cleanup_old_resumes()
     user_data_dir = str(Path.cwd() / "chrome_profile")
+    
+    # Ensure resume exists
+    if not Path(RESUME_PATH).exists():
+        logging.error(f"CRITICAL: Resume not found at {RESUME_PATH}")
+        return
+
     with sync_playwright() as p:
         context = p.chromium.launch_persistent_context(
-            user_data_dir, headless=False, slow_mo=1000,
+            user_data_dir, 
+            headless=HEADLESS_MODE, 
+            slow_mo=1000,
             args=["--disable-blink-features=AutomationControlled"]
         )
         page = context.pages[0] if context.pages else context.new_page()
@@ -209,10 +178,10 @@ def run_automation():
                     logging.info(f"⏭️ Skipping {job_id}: Already processed.")
                     continue
                 
+                card.scroll_into_view_if_needed()
                 card.click()
                 time.sleep(3) 
 
-                # Title Extraction
                 title_selectors = ["h2.t-24", ".job-details-jobs-unified-top-card__job-title", "h1.t-24"]
                 title = None
                 for s in title_selectors:
@@ -226,27 +195,19 @@ def run_automation():
 
                 logging.info(f"✅ LOCK ON: {title}")
                 
-                # Desc Extraction
-                desc_selectors = [".jobs-search__job-details--container", "#job-details", ".jobs-box__html-content"]
-                desc = None
-                for s in desc_selectors:
-                    el = page.query_selector(s)
-                    if el: 
-                        desc = el.inner_text().strip()
-                        if desc and len(desc) > 50: break 
-
-                if desc:
-                    new_resume = create_tailored_resume(title, desc)
-                    pitch = analyze_job_locally(title)
-                    success = handle_easy_apply(page, new_resume)
-                    
-                    if success:
-                        log_applied_job(job_id)
-                        webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
-                        if webhook_url:
-                            requests.post(webhook_url, json={"content": f"🎯 **Applied (Remote):** {title}\n**AI Pitch:** {pitch}"})
-                        found_valid_job = True
-                        break 
+                # Analyze Pitch (Optional, just for Discord)
+                pitch = analyze_job_locally(title)
+                
+                # Apply with Base Resume
+                success = handle_easy_apply(page)
+                
+                if success:
+                    log_applied_job(job_id)
+                    webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
+                    if webhook_url:
+                        requests.post(webhook_url, json={"content": f"🎯 **Applied (Remote):** {title}\n**Resume:** Base PDF\n**AI Pitch:** {pitch}"})
+                    found_valid_job = True
+                    break 
             
             if not found_valid_job:
                 logging.info("🏁 No valid new jobs found in this batch.")
