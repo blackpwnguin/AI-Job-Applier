@@ -1,6 +1,6 @@
-# AI Job Applier & LinkedIn Bot
+# Azure Browser Agent
 
-This project is an automated job application bot designed to scrape job listings (e.g., from LinkedIn), filter them based on user-defined criteria, and apply to them automatically. It leverages **Azure Functions** for orchestration, **Playwright** for browser automation, and **Ollama** for local AI-powered resume tailoring and decision making.
+This project is an automated job application agent designed to scrape job listings (e.g., from LinkedIn), filter them based on user-defined criteria, and apply to them automatically. It leverages **Azure Functions** for orchestration, **Playwright** for browser automation, and **Ollama** for local AI-powered resume tailoring and decision making.
 
 ## 🚀 Features
 
