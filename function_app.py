@@ -17,7 +17,7 @@ load_dotenv()
 app = func.FunctionApp()
 
 # --- CONFIGURATION ---
-AUTO_SUBMIT = False 
+AUTO_SUBMIT = True
 RESUME_PATH = "resume.pdf"
 LOG_FILE = Path("applied_jobs.json")
 
